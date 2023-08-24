@@ -1,3 +1,5 @@
+from datetime import datetime,date
+hoy=datetime.strftime
 class Medicamento:
     def __init__(self):
         self.__nombre = "" 
@@ -34,7 +36,7 @@ class Mascota:
     def verFecha(self):
         return self.__fecha_ingreso
     def verLista_Medicamentos(self):
-        return self.__lista_medicamentos 
+        return self.__lista_medicamentos
             
     def asignarNombre(self,n):
         self.__nombre=n
@@ -51,41 +53,53 @@ class Mascota:
     
 class sistemaV:
     def __init__(self):
-        self.__lista_mascotas = []
+        self.__lista_canino = {}
+        self.__lista_felino={}
     
-    def verificarExiste(self,historia):
-        for m in self.__lista_mascotas:
-            if historia == m.verHistoria():
-                return True
-        #solo luego de haber recorrido todo el ciclo se retorna False
-        return False
+    def verificarExiste(self,m):
+        if m in self.__lista_canino or m in self.__lista_felino:   
+            return False
         
     def verNumeroMascotas(self):
-        return len(self.__lista_mascotas) 
+        longitud=len(self.__lista_canino) + len(self.__lista_felino)
+        return longitud
     
-    def ingresarMascota(self,mascota):
-        self.__lista_mascotas.append(mascota) 
+    def ingresarMascota(self,mascota,tipo):
+        if tipo=="felino":
+            self.__lista_felino[mascota.verHistoria()]=mascota
+        if tipo=="canino":
+            self.__lista_canino[mascota.verHistoria()]=mascota 
    
 
     def verFechaIngreso(self,historia):
         #busco la mascota y devuelvo el atributo solicitado
-        for masc in self.__lista_mascotas:
+        for masc in self.__lista_felino:
             if historia == masc.verHistoria():
-                return masc.verFecha() 
+                return masc.verFecha()
+        for masc in self.__lista_canino:
+            if historia == masc.verHistoria():
+                return masc.verFecha()
         return None
 
     def verMedicamento(self,historia):
         #busco la mascota y devuelvo el atributo solicitado
-        for masc in self.__lista_mascotas:
+        for masc in self.__lista_canino:
+            if historia == masc.verHistoria():
+                return masc.verLista_Medicamentos() 
+        for masc in self.__lista_felino:
             if historia == masc.verHistoria():
                 return masc.verLista_Medicamentos() 
         return None
     
     def eliminarMascota(self, historia):
-        for masc in self.__lista_mascotas:
+        for masc in self.__lista_canino:
             if historia == masc.verHistoria():
-                self.__lista_mascotas.remove(masc)  #opcion con el pop
+                self.__lista_canino.remove(masc)  #opcion con el pop
                 return True  #eliminado con exito
+        for masc in self.__lista_felino:
+            if historia == masc.verHistoria():
+                self.__lista_felino.remove(masc)  
+                return True  
         return False 
 
 def main():
@@ -110,7 +124,7 @@ def main():
                 nombre=input("Ingrese el nombre de la mascota: ")
                 tipo=input("Ingrese el tipo de mascota (felino o canino): ")
                 peso=int(input("Ingrese el peso de la mascota: "))
-                fecha=input("Ingrese la fecha de ingreso (dia/mes/año): ")
+                fecha=hoy.strftime("%d/%m/%Y")
                 nm=int(input("Ingrese cantidad de medicamentos: "))
                 lista_med=[]
 
