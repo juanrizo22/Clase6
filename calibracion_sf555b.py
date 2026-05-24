@@ -16,17 +16,6 @@ BLOCK_SIZE  = 1024
 INTERVALO   = 2  # segundos entre muestras
 
 
-def listar_micros():
-    print("\n=== Dispositivos de entrada disponibles ===")
-    encontrados = []
-    for i, d in enumerate(sd.query_devices()):
-        if d["max_input_channels"] > 0:
-            print(f"  ID {i:2d} | canales: {d['max_input_channels']} | {d['name']}")
-            encontrados.append(i)
-    if not encontrados:
-        print("  [!] No se encontraron dispositivos.")
-    return encontrados
-
 
 def abrir_micro(device_id):
     info = sd.query_devices(device_id)
@@ -94,16 +83,7 @@ def exportar_xlsx(muestras, archivo):
 
 
 def main():
-    ids = listar_micros()
-    if not ids:
-        sys.exit(1)
-
-    try:
-        mic_id = int(input("\nIngrese el ID del micrófono USB: "))
-    except ValueError:
-        sys.exit("[!] ID inválido.")
-    if mic_id not in ids:
-        sys.exit(f"[!] ID {mic_id} no válido.")
+    mic_id = 2
 
     try:
         stream = abrir_micro(mic_id)
