@@ -1,17 +1,16 @@
 """
-Calibración SF555B con micrófono USB en Raspberry Pi.
-Compara la lectura del ESP32 (vía Serial) con el micrófono USB de referencia.
+Calibración SF555B en Raspberry Pi.
+Compara el micrófono I2S (SF555B, via ALSA) con un micrófono USB de referencia.
+Ambos dispositivos se leen directamente como entradas de audio de la RPi.
 """
 
 import sounddevice as sd
 import numpy as np
-import serial
 import time
 import sys
 
 SAMPLE_RATE = 44100
 BLOCK_SIZE  = 1024
-REF_PRESSURE = 20e-6  # 20 µPa
 
 
 def listar_micros():
@@ -28,21 +27,24 @@ def listar_micros():
     return encontrados
 
 
-def abrir_micro(device_id):
+def abrir_micro(device_id, label=""):
     """
-    Abre el dispositivo con el número de canales que realmente soporta.
-    Devuelve (stream, channels) o lanza excepción si falla.
+    Abre el dispositivo usando exactamente 1 canal (mono).
+    La mayoría de micrófonos USB e I2S exponen 1 canal bajo ALSA.
+    Lanza ValueError si el dispositivo no tiene entradas.
     """
     info = sd.query_devices(device_id)
     max_ch = int(info["max_input_channels"])
 
     if max_ch == 0:
-        raise ValueError(f"El dispositivo ID {device_id} no tiene canales de entrada.")
+        raise ValueError(f"ID {device_id} ('{info['name']}') no tiene canales de entrada.")
 
-    # La mayoría de micrófonos USB son mono; usamos 1 canal siempre que sea posible.
-    channels = 1 if max_ch >= 1 else max_ch
+    # Usamos siempre 1 canal para evitar el error channelCount > maxChans
+    channels = min(1, max_ch)
 
-    print(f"\n[OK] Usando '{info['name']}' — {channels} canal(es) a {SAMPLE_RATE} Hz")
+    tag = f"[{label}]" if label else ""
+    print(f"  {tag} '{info['name']}' — {channels} canal(es) a {SAMPLE_RATE} Hz")
+
     stream = sd.InputStream(
         device=device_id,
         channels=channels,
@@ -50,38 +52,30 @@ def abrir_micro(device_id):
         blocksize=BLOCK_SIZE,
         dtype="float32",
     )
-    return stream, channels
+    return stream
 
 
-def calcular_dba(stream, segundos=1):
-    """Captura `segundos` de audio y devuelve el nivel RMS en dBFS."""
-    stream.start()
-    muestras = int(SAMPLE_RATE * segundos / BLOCK_SIZE)
+def medir_db(stream, segundos=1):
+    """Devuelve el nivel RMS en dBFS de `segundos` de grabación."""
+    n_bloques = max(1, int(SAMPLE_RATE * segundos / BLOCK_SIZE))
     cuadrados = []
-    for _ in range(muestras):
+    for _ in range(n_bloques):
         bloque, _ = stream.read(BLOCK_SIZE)
-        canal = bloque[:, 0]  # siempre usamos el primer canal
-        cuadrados.append(np.mean(canal ** 2))
-    stream.stop()
+        cuadrados.append(np.mean(bloque[:, 0] ** 2))
     rms = np.sqrt(np.mean(cuadrados))
-    db = 20 * np.log10(rms + 1e-9)
-    return db
+    return 20.0 * np.log10(rms + 1e-9)
 
 
-def leer_esp32(puerto, baudrate=115200, timeout=5):
-    """Lee una línea de nivel del ESP32 y extrae el valor numérico."""
+def pedir_id(prompt, validos):
     try:
-        with serial.Serial(puerto, baudrate, timeout=timeout) as s:
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                linea = s.readline().decode("utf-8", errors="ignore").strip()
-                if "Nivel:" in linea:
-                    partes = linea.split(":")
-                    if len(partes) == 2:
-                        return float(partes[1].replace("dBA", "").strip())
-    except serial.SerialException as e:
-        print(f"  [!] Serial: {e}")
-    return None
+        val = int(input(prompt))
+    except ValueError:
+        print("[!] Ingrese un número entero.")
+        sys.exit(1)
+    if val not in validos:
+        print(f"[!] ID {val} no es válido o no tiene entradas.")
+        sys.exit(1)
+    return val
 
 
 def main():
@@ -89,59 +83,45 @@ def main():
     if not ids_validos:
         sys.exit(1)
 
-    # --- Selección de dispositivo ---
-    try:
-        mic_id = int(input("\nIngrese el ID del micrófono USB de referencia: "))
-    except ValueError:
-        print("[!] ID inválido.")
-        sys.exit(1)
+    print()
+    id_ref = pedir_id("ID del micrófono USB de referencia  : ", ids_validos)
+    id_sf  = pedir_id("ID del micrófono I2S SF555B (ALSA)  : ", ids_validos)
 
-    if mic_id not in ids_validos:
-        print(f"[!] ID {mic_id} no tiene entradas de audio.")
-        sys.exit(1)
-
-    # --- Abrir micrófono ---
+    print("\nAbriendo dispositivos...")
     try:
-        stream, channels = abrir_micro(mic_id)
-    except Exception as e:
+        stream_ref = abrir_micro(id_ref, "USB Ref")
+        stream_sf  = abrir_micro(id_sf,  "SF555B ")
+    except ValueError as e:
         print(f"[ERROR] {e}")
         sys.exit(1)
 
-    # --- Puerto Serial del ESP32 ---
-    puerto = input("Puerto serial del ESP32 (ej: /dev/ttyUSB0) [Enter para omitir]: ").strip()
-
     print("\nIniciando calibración — presione Ctrl+C para detener.\n")
-    offset = None
+    print(f"{'Tiempo':>8}  {'USB Ref':>10}  {'SF555B':>10}  {'Offset':>10}")
+    print("-" * 46)
+
+    offsets = []
+    inicio = time.time()
 
     try:
+        stream_ref.start()
+        stream_sf.start()
         while True:
-            db_ref = calcular_dba(stream, segundos=1)
-            print(f"[Ref USB ] {db_ref:7.2f} dBFS", end="")
-
-            if puerto:
-                db_esp = leer_esp32(puerto)
-                if db_esp is not None:
-                    if offset is None:
-                        offset = db_ref - db_esp
-                        print(f"\n  -> Offset calculado: {offset:.2f} dB")
-                        print(f"     En el ESP32 cambia la línea de calibración a:")
-                        print(f"     float db = 20 * log10(rms + 0.0001) + {10 + offset:.1f};")
-                    diff = db_ref - db_esp
-                    print(f"  |  [ESP32] {db_esp:7.2f} dBA  |  diff {diff:+.2f} dB")
-                else:
-                    print("  |  [ESP32] sin datos")
-            else:
-                print()
-
-            time.sleep(0.5)
+            db_ref = medir_db(stream_ref, segundos=1)
+            db_sf  = medir_db(stream_sf,  segundos=1)
+            offset = db_ref - db_sf
+            offsets.append(offset)
+            elapsed = time.time() - inicio
+            print(f"{elapsed:7.1f}s  {db_ref:9.2f}  {db_sf:9.2f}  {offset:+9.2f}  dBFS")
 
     except KeyboardInterrupt:
-        print("\n[!] Calibración detenida.")
+        print("\n--- Calibración detenida ---")
+
     finally:
-        if stream.active:
-            stream.stop()
-        stream.close()
+        stream_ref.stop(); stream_ref.close()
+        stream_sf.stop();  stream_sf.close()
 
-
-if __name__ == "__main__":
-    main()
+    if offsets:
+        offset_medio = np.mean(offsets)
+        print(f"\nOffset promedio (USB - SF555B): {offset_medio:+.2f} dB")
+        print(f"\nPara ajustar la lectura del SF555B en Python, súmale este valor:")
+        print(f"  db_calibrado = db_sf + ({offset_medio:+.2f})")
